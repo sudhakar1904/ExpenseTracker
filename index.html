@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const App = () => {
+            const [db, setDb] = React.useState(null);
+            const [auth, setAuth] = React.useState(null);
+            const [userId, setUserId] = React.useState(null);
+            const [isAuthReady, setIsAuthReady] = React.useState(false);
+            const [expenses, setExpenses] = React.useState([]);
+            const [description, setDescription] = React.useState('');
+            const [amount, setAmount] = React.useState('');
+            const [category, setCategory] = React.useState('');
+            const [owner, setOwner] = React.useState('');
+            const [date, setDate] = React.useState('');
+            const [editingId, setEditingId] = React.useState(null);
+            const [error, setError] = React.useState(null);
+
+            // Global variables provided by the environment
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            React.useEffect(() => {
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const firestoreDb = getFirestore(app);
+                    const firestoreAuth = getAuth(app);
+                    setDb(firestoreDb);
+                    setAuth(firestoreAuth);
+
+                    const unsubscribe = onAuthStateChanged(firestoreAuth, async (user) => {
+                        if (user) {
+                            setUserId(user.uid);
+                        } else {
+                            try {
+                                if (initialAuthToken) {
+                                    await signInWithCustomToken(firestoreAuth, initialAuthToken);
+                                } else {
+                                    await signInAnonymously(firestoreAuth);
+                                }
+                            } catch (e) {
+                                console.error('Error during sign-in:', e);
+                                setError('Failed to authenticate. Please try again.');
+                            }
+                        }
+                        setIsAuthReady(true);
+                    });
+
+                    return () => unsubscribe();
+                } catch (e) {
+                    console.error('Firebase initialization error:', e);
+                    setError('Failed to initialize Firebase.');
+                }
+            }, []);
+
+            React.useEffect(() => {
+                if (isAuthReady && db && userId) {
+                    const collectionPath = `/artifacts/${appId}/users/${userId}/expenses`;
+                    const expensesCollection = collection(db, collectionPath);
+                    const unsubscribe = onSnapshot(expensesCollection, (snapshot) => {
+                        const expenseList = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        expenseList.sort((a, b) => new Date(b.date) - new Date(a.date));
+                        setExpenses(expenseList);
+                    }, (e) => {
+                        console.error('Error fetching expenses:', e);
+                        setError('Failed to fetch expenses.');
+                    });
+
+                    return () => unsubscribe();
+                }
+            }, [isAuthReady, db, userId, appId]);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!description || !amount || !date || !category || !owner) {
+                    setError('Please fill in all fields.');
+                    return;
+                }
+
+                const expenseData = {
+                    description,
+                    amount: parseFloat(amount),
+                    category,
+                    owner,
+                    date,
+                    timestamp: new Date().toISOString()
+                };
+
+                try {
+                    if (editingId) {
+                        const expenseDocRef = doc(db, `/artifacts/${appId}/users/${userId}/expenses`, editingId);
+                        await updateDoc(expenseDocRef, expenseData);
+                        setEditingId(null);
+                    } else {
+                        const expensesCollection = collection(db, `/artifacts/${appId}/users/${userId}/expenses`);
+                        await addDoc(expensesCollection, expenseData);
+                    }
+                    setDescription('');
+                    setAmount('');
+                    setCategory('');
+                    setOwner('');
+                    setDate('');
+                    setError(null);
+                } catch (e) {
+                    console.error('Error handling expense:', e);
+                    setError('Failed to save expense. Check your input.');
+                }
+            };
+
+            const handleEdit = (expense) => {
+                setEditingId(expense.id);
+                setDescription(expense.description);
+                setAmount(expense.amount);
+                setCategory(expense.category);
+                setOwner(expense.owner);
+                setDate(expense.date);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            };
+
+            const handleDelete = async (id) => {
+                console.log(`Attempting to delete expense with ID: ${id}`);
+                try {
+                    const expenseDocRef = doc(db, `/artifacts/${appId}/users/${userId}/expenses`, id);
+                    await deleteDoc(expenseDocRef);
+                } catch (e) {
+                    console.error('Error deleting expense:', e);
+                    setError('Failed to delete expense.');
+                }
+            };
+
+            const categories = ['Rent', 'Maintenance', 'Travel & Fuel', 'Bike Maintenance', 'Textile & Accessories', 'Eating Out', 'Groceries', 'Vegetables & Fruits', 'Phone Maintenance', 'Electricity Bill', 'Gifts', 'Appliance Repair & Maintenance'];
+            const owners = ['Sudhakar', 'Mahathi', 'Common expense'];
+
+            return (
+                <div className="min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-4 sm:p-6 lg:p-8 font-inter">
+                    <div className="max-w-4xl mx-auto">
+                        <header className="flex justify-between items-center mb-6">
+                            <h1 className="text-3xl sm:text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-purple-600">
+                                Expense Tracker
+                            </h1>
+                        </header>
+
+                        {error && (
+                            <div className="bg-red-500 text-white p-3 rounded-lg text-center mb-4 shadow-md">
+                                {error}
+                            </div>
+                        )}
+
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg mb-6">
+                            <h2 className="text-2xl font-semibold mb-4 text-center">
+                                {editingId ? 'Edit Expense' : 'Add New Expense'}
+                            </h2>
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                <div>
+                                    <label htmlFor="description" className="block text-sm font-medium mb-1">Description</label>
+                                    <input
+                                        type="text"
+                                        id="description"
+                                        value={description}
+                                        onChange={(e) => setDescription(e.target.value)}
+                                        placeholder="e.g., Groceries from Walmart"
+                                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-gray-100"
+                                    />
+                                </div>
+                                <div>
+                                    <label htmlFor="amount" className="block text-sm font-medium mb-1">Amount</label>
+                                    <input
+                                        type="number"
+                                        id="amount"
+                                        value={amount}
+                                        onChange={(e) => setAmount(e.target.value)}
+                                        placeholder="e.g., 55.75"
+                                        step="0.01"
+                                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-gray-100"
+                                    />
+                                </div>
+                                <div>
+                                    <label htmlFor="category" className="block text-sm font-medium mb-1">Category</label>
+                                    <select
+                                        id="category"
+                                        value={category}
+                                        onChange={(e) => setCategory(e.target.value)}
+                                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-gray-100"
+                                    >
+                                        <option value="" disabled>Select Category</option>
+                                        {categories.map(cat => (
+                                            <option key={cat} value={cat}>{cat}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="owner" className="block text-sm font-medium mb-1">Expense Owner</label>
+                                    <select
+                                        id="owner"
+                                        value={owner}
+                                        onChange={(e) => setOwner(e.target.value)}
+                                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-gray-100"
+                                    >
+                                        <option value="" disabled>Select Owner</option>
+                                        {owners.map(ownerName => (
+                                            <option key={ownerName} value={ownerName}>{ownerName}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label htmlFor="date" className="block text-sm font-medium mb-1">Date</label>
+                                    <input
+                                        type="date"
+                                        id="date"
+                                        value={date}
+                                        onChange={(e) => setDate(e.target.value)}
+                                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 dark:bg-gray-700 dark:text-gray-100"
+                                    />
+                                </div>
+                                <button
+                                    type="submit"
+                                    className="w-full py-3 px-4 bg-gradient-to-r from-blue-500 to-purple-600 text-white font-semibold rounded-lg shadow-md hover:from-blue-600 hover:to-purple-700 transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                >
+                                    {editingId ? 'Update Expense' : 'Add Expense'}
+                                </button>
+                            </form>
+                        </div>
+
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg">
+                            <h2 className="text-2xl font-semibold mb-4 text-center">Expense History</h2>
+                            {expenses.length === 0 ? (
+                                <p className="text-center text-gray-500 dark:text-gray-400">No expenses recorded yet.</p>
+                            ) : (
+                                <ul className="space-y-4">
+                                    {expenses.map((expense) => (
+                                        <li key={expense.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-center">
+                                            <div className="flex-1 min-w-0 mb-2 sm:mb-0">
+                                                <p className="font-bold text-lg truncate">{expense.description}</p>
+                                                <p className="text-gray-500 dark:text-gray-400 text-sm">{new Date(expense.date).toLocaleDateString()}</p>
+                                            </div>
+                                            <div className="flex-1 flex flex-col sm:flex-row justify-end items-center space-x-0 sm:space-x-4 space-y-2 sm:space-y-0 min-w-0">
+                                                <span className="text-lg font-bold text-green-600 dark:text-green-400 whitespace-nowrap">${expense.amount.toFixed(2)}</span>
+                                                <span className="bg-blue-200 text-blue-800 dark:bg-blue-800 dark:text-blue-200 text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap">{expense.category}</span>
+                                                <span className="bg-yellow-200 text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200 text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap">{expense.owner}</span>
+                                                <div className="flex space-x-2">
+                                                    <button
+                                                        onClick={() => handleEdit(expense)}
+                                                        className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors duration-300"
+                                                        title="Edit"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zm-7.586 6.414L3 14.586V17h2.414L11.5 10.914l-2.828-2.828L6 10zm-3 7a1 1 0 100-2 1 1 0 000 2z" />
+                                                        </svg>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDelete(expense.id)}
+                                                        className="p-2 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors duration-300"
+                                                        title="Delete"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+
+                        <div className="mt-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                            <p>Logged in with User ID: {userId ? userId : 'Loading...'}</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
